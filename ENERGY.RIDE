@@ -1,0 +1,59 @@
+{-# STDLIB_VERSION 5 #-}
+{-# SCRIPT_TYPE ACCOUNT #-}
+{-# CONTENT_TYPE DAPP #-}
+
+let ENERGYAssetID = base58'J9ioh5eQXK4sByktt6tQCQ5pGHrvAFYbBFj6825pJiPW'
+
+let txns = match getInteger(this, "Totaltxns") {
+    case a: Int => 
+        a
+    case _ => 
+        0
+}
+
+let totaltxns = (txns + 1)
+
+@Callable(i)
+func MINT_ENERGY () = {
+    let minimum_minting = 1_0000_0000 # 1 ENERGY
+
+    let pmt = if ((size(i.payments) == 1)) then i.payments[0] else throw((toString((minimum_minting / 1_0000_0000)) + " SWRM Token is required as Attached payment"))
+    let currentKey = toBase58String(i.caller.bytes)
+    let PricePerENERGY = getIntegerValue(this, "ENERGY/SWRM")
+    let ENERGYCurrentCap = getIntegerValue(this, "ENERGYCurrentCap")
+    let NewENERGYToUser = fraction(100000, pmt.amount, PricePerENERGY)
+    let PreviousIssuedENERGY =     match getInteger(this, "Total_Issued_ENERGY") {
+        case a: Int => 
+            a
+        case _ => 
+            0
+    }
+    let TotalIssuedENERGY = PreviousIssuedENERGY + NewENERGYToUser
+    let PendingMinting = ENERGYCurrentCap - TotalIssuedENERGY
+    let PreviousENERGYReserveValue = getIntegerValue(this, "Total_ENERGY_Reserve_In_SWRM")
+    let ENERGYReserveValue = (PreviousENERGYReserveValue + pmt.amount)
+    let PreviousENERGYBackupPrice = getIntegerValue(this, "ENERGY_Backup_Value_In_SWRM")
+    let ENERGYBackupPrice = fraction(100000, ENERGYReserveValue, TotalIssuedENERGY)
+    if (isDefined(pmt.assetId))
+        then throw("Incorrect asset attached, please attach SWRM.")
+        else if ((minimum_minting > pmt.amount))
+            then throw("Please Attach minimum 1 SWRM To Issue ENERGY Asset.")
+            else if ((TotalIssuedENERGY > ENERGYCurrentCap))
+                then throw((((((("ENERGY Minting is about to reach the Cap of " + toString(ENERGYCurrentCap)) + "/10^8 ENERGY. Please Reduce your Minting Order by ") + toString(PendingMinting)) + " or put ") + toString((ENERGYCurrentCap - PreviousIssuedENERGY))) + "/10^8"))
+                else [
+                IntegerEntry("Total_Issued_ENERGY", TotalIssuedENERGY), 
+                IntegerEntry("Balance_Minting_ENERGY", PendingMinting), 
+                IntegerEntry("Total_ENERGY_Reserve_In_SWRM", ENERGYReserveValue), 
+                IntegerEntry("ENERGY_Backup_Value_In_SWRM", ENERGYBackupPrice),
+                IntegerEntry("Totaltxns", totaltxns), 
+                StringEntry("message", "<h1>ENERGY Issued Successfully!</h1><br>"), 
+                Reissue(ENERGYAssetID, NewENERGYToUser, true), 
+                ScriptTransfer(i.caller, (NewENERGYToUser), ENERGYAssetID)
+                ]
+    }
+
+@Verifier(tx)
+func verify () = match tx {
+    case _ => 
+        sigVerify(tx.bodyBytes, tx.proofs[0], tx.senderPublicKey)
+}
