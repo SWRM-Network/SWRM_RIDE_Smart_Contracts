@@ -1,0 +1,31 @@
+## USDC Smart Asset is tied to ENERGY Token that has an mandatory condition to use ENERGY as sponsership fee.
+## User can only Burn, Transfer, Invoke
+## Contract Deployer can only change script and reissue supply 
+## Rest all other txns types are resticted
+
+{-# STDLIB_VERSION 6 #-}
+{-# CONTENT_TYPE EXPRESSION #-}
+{-# SCRIPT_TYPE ASSET #-}
+
+let sponsorAssetId = base58'J9ioh5eQXK4sByktt6tQCQ5pGHrvAFYbBFj6825pJiPW' # Replace with ENERGY AssetID
+let issuerAddress = Address(base58'37N5hxS6tp59a1U3Vt7XQ831ZfGdhtvtfWk')  # Replace with issuer's address
+
+match tx {
+    # Only allow Burn, Transfer, and InvokeScript transactions
+    case t: TransferTransaction | InvokeScriptTransaction =>
+        # Ensure fee is paid in the sponsored asset
+        t.feeAssetId == sponsorAssetId
+		
+	case b : BurnTransaction => true
+
+    # Allow script modification only by the issuer
+    case s: SetAssetScriptTransaction =>
+        s.sender == issuerAddress
+
+    # Allow script modification only by the issuer
+    case r: ReissueTransaction =>
+        r.sender == issuerAddress
+
+    # Deny all other transactions
+    case _ => false
+}
