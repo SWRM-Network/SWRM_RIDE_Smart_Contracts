@@ -1,0 +1,538 @@
+{-# STDLIB_VERSION 6 #-}
+{-# SCRIPT_TYPE ACCOUNT #-}
+{-# CONTENT_TYPE DAPP #-}
+
+let Version = "1.0.1"
+let dAppSinceStart = 1747855555_000 #TimeStamp in Milliseconds
+let listing_fee = 1_0000_0000 # 1 SWRM
+
+let key1owner =  addressFromPublicKey(base58'BHrHXiaHF4ahMQzhn9fydHKvZQ3RLLzUXaBawensWfHx')
+let key2owner = addressFromPublicKey(base58'BHrHXiaHF4ahMQzhn9fydHKvZQ3RLLzUXaBawensWfHx') 
+let Treasury = addressFromPublicKey(base58'BHrHXiaHF4ahMQzhn9fydHKvZQ3RLLzUXaBawensWfHx') 
+let Price_Balancer_dApp = addressFromPublicKey(base58'BHrHXiaHF4ahMQzhn9fydHKvZQ3RLLzUXaBawensWfHx')
+
+let SWRMAssetID = unit #SWRM
+let SWRMAssetNAME = "SWRM"
+
+func countdays() = {
+    let TS_Diff = lastBlock.timestamp - dAppSinceStart
+    let daynumber = fraction(1,TS_Diff,86400_000)
+    daynumber
+    }
+
+@Callable(i)
+func RegisterPair (EnterAssetID:String) = {
+    let pmt1 = value(i.payments[0]) # SWRM AssetID To Attach
+    let pmt2 = value(i.payments[1]) # EnterAssetID must be equal to pmt2 AssetID 
+    let pmt3 = value(i.payments[2]) # Listing Fee Attached Amount 
+    let currentKey = toBase58String(i.caller.bytes)
+    let SWRM = !(isDefined(pmt2.assetId))
+    let fetchpair = getString(this, "Pair_UV_" + EnterAssetID)
+    let assetinfopmt2 = fromBase58String(EnterAssetID)
+
+    # Checking Asset Info and LP    
+    let info = valueOrErrorMessage(assetInfo(fromBase58String(EnterAssetID)), "Asset " + EnterAssetID + " doesn't exist")
+    let name = info.name
+    let decimals = info.decimals
+    
+# Calculate Unit Token Price
+    let get_asset_decimals = pow(10,0,decimals,0,0,CEILING) # Asset Decimals
+    let get_SWRM_decimals = pow(10,0,8,0,0,CEILING) # SWRM Decimals
+    let unit_token_price = fraction(pmt1.amount,get_asset_decimals,pmt2.amount)  # Unit Token Price = SWRM Balance/Asset Balance  
+
+    let LPdecimals = fraction(decimals + 8, 1, 2) # Example for 8 Decimals Asset: (8+8)/2 = 8 decimals
+    let FirstLPQty = 1 * pow(10, 0, LPdecimals, 0, 0, CEILING) 
+    let multiply_amounts = fraction(pmt1.amount,pmt2.amount,FirstLPQty)
+    let getSqrt = sqrt(multiply_amounts,LPdecimals,LPdecimals,CEILING)
+
+    let LPissue = Issue("LP-" + take(name, 7) + "-SWRM", "LP-" + name + "-SWRM" + " is a Liquidity Provider Token Issued Against " + EnterAssetID, getSqrt, LPdecimals, true)
+    let LPid = calculateAssetId(LPissue)
+
+    if (fetchpair == EnterAssetID)
+    then throw("Pair Already Exist in List.")
+    
+    else if (size(i.payments) != 3)
+    then throw("Two attached assets expected as payment. Kindly Attach payment1 = SWRM Token Amount & payment2 = Token you want to List & payment3 = ["+toString(listing_fee)+"/10^8] SWRM as Listing Fee.")
+
+    else if (isDefined(pmt1.assetId))
+    then throw("Incorrect asset attached as payment[1], please attach SWRM only.")
+    
+    else if (pmt1.amount < 1_000_0000) # 0.1 SWRM
+    then throw("Attached payment[1] amount is less than 0.1 SWRM, please attach 0.1 SWRM Minimum.")
+    
+    else if (pmt2.assetId != assetinfopmt2)
+    then throw("Input String & Attached AssetID in payment2 is not matching.")
+
+    else if (isDefined(pmt3.assetId))
+    then throw("Incorrect asset attached as payment[3], please attach SWRM only.")
+
+    else if (pmt3.amount != listing_fee) # 1 SWRM
+    then throw("Attached payment[3] amount has to be exact ["+toString(listing_fee)+"/10^8] SWRM.")
+
+    else if (SWRM == true)
+    then throw("You Attached SWRM Asset ID for Listing, please attach Tokens You want to list in payment[2].")
+    
+    else if (100 > unit_token_price)
+    then throw("LP Token Outcome is going below 100 in Fractional. Please Attach more tokens amount in payment[1] and payment[2].")
+
+    else if (1 > getSqrt)
+    then throw("LP Token Outcome is going below 1 in Fractional. Please Attach more amount in payment[1] and payment[2].")
+
+    else [
+    StringEntry("Pair_UV_" + EnterAssetID, EnterAssetID),
+    IntegerEntry("Listing_Fee_" + EnterAssetID, pmt3.amount), 
+
+    IntegerEntry("Balance_of_" + EnterAssetID + "_" + SWRMAssetNAME, pmt1.amount), 
+    IntegerEntry("Balance_of_" + SWRMAssetNAME + "_" + EnterAssetID, pmt2.amount), 
+    IntegerEntry("Total_of_Pair_Txns_" + EnterAssetID, 0), 
+    IntegerEntry("Total_Volume_Of_" + SWRMAssetNAME + "_" + EnterAssetID,0),
+    IntegerEntry("Total_Volume_Of_" + EnterAssetID+"_" + SWRMAssetNAME,0),
+    IntegerEntry("Total_Swap_Fee_Collected_" + EnterAssetID + "_" + SWRMAssetNAME, 0), 
+    IntegerEntry("Total_Swap_Fee_Collected_" + EnterAssetID, 0),
+    
+    LPissue,
+    ScriptTransfer(i.caller, getSqrt, LPid), # Transfer LP AssetID To Lister
+    ScriptTransfer(key1owner,fraction(listing_fee,1,2),SWRMAssetID), # Spliting Half Listing Fee to owner1
+    ScriptTransfer(key2owner,fraction(listing_fee,1,2),SWRMAssetID), # Spliting Half Listing Fee to owner2
+    StringEntry("LP_" + EnterAssetID, toBase58String(LPid)), 
+    IntegerEntry("Total_LP_" + EnterAssetID, getSqrt) # Total LP Token Minted
+    ]
+    }
+
+@Callable(i)
+func DirectListing (EnterAssetID:String) = {
+    let pmt1 = value(i.payments[0]) # SWRM AssetID To Attach
+    let pmt2 = value(i.payments[1]) # EnterAssetID must be equal to pmt2 AssetID 
+    let currentKey = toBase58String(i.caller.bytes)
+    let SWRM = !(isDefined(pmt2.assetId))
+    let fetchpair = getString(this, "Pair_UV_" + EnterAssetID)
+    let assetinfopmt2 = fromBase58String(EnterAssetID)
+
+    # Checking Asset Info and LP    
+    let info = valueOrErrorMessage(assetInfo(fromBase58String(EnterAssetID)), "Asset " + EnterAssetID + " doesn't exist")
+    let name = info.name
+    let decimals = info.decimals
+    
+# Calculate Unit Token Price
+    let get_asset_decimals = pow(10,0,decimals,0,0,CEILING) # Asset Decimals
+    let get_SWRM_decimals = pow(10,0,8,0,0,CEILING) # SWRM Decimals
+    let unit_token_price = fraction(pmt1.amount,get_asset_decimals,pmt2.amount)  # Unit Token Price = SWRM Balance/Asset Balance  
+
+    let LPdecimals = fraction(decimals + 8, 1, 2) # Example for 8 Decimals Asset: (8+8)/2 = 8 decimals
+    let FirstLPQty = 1 * pow(10, 0, LPdecimals, 0, 0, CEILING) 
+    let multiply_amounts = fraction(pmt1.amount,pmt2.amount,FirstLPQty)
+    let getSqrt = sqrt(multiply_amounts,LPdecimals,LPdecimals,CEILING)
+
+    let LPissue = Issue("LP-" + take(name, 7) + "-SWRM", "LP-" + name + "-SWRM" + " is a Liquidity Provider Token Issued Against " + EnterAssetID, getSqrt, LPdecimals, true)
+    let LPid = calculateAssetId(LPissue)
+
+
+    if (i.caller != key1owner) then throw("This Address is not Authorized. Only " + toString(key1owner) + " is Authorized Address to Sign it.")
+
+    else if (fetchpair == EnterAssetID)
+    then throw("Pair Already Exist in List.")
+    
+    else if (size(i.payments) != 2)
+    then throw("Two attached assets expected as payment. Kindly Attach payment1 = SWRM Token Amount & payment2 = Token you want to List.")
+
+    else if (isDefined(pmt1.assetId))
+    then throw("Incorrect asset attached as payment[1], please attach SWRM only.")
+    
+    else if (pmt1.amount < 1_000_0000) # 0.1 SWRM
+    then throw("Attached payment[1] amount is less than 0.1 SWRM, please attach 0.1 SWRM Minimum.")
+    
+    else if (pmt2.assetId != assetinfopmt2)
+    then throw("Input String & Attached AssetID in payment2 is not matching.")
+
+    else if (SWRM == true)
+    then throw("You Attached SWRM Asset ID for Listing, please attach Tokens You want to list in payment[2].")
+    
+    else if (100 > unit_token_price)
+    then throw("LP Token Outcome is going below 100 in Fractional. Please Attach more tokens amount in payment[1] and payment[2].")
+
+    else if (1 > getSqrt)
+    then throw("LP Token Outcome is going below 1 in Fractional. Please Attach more amount in payment[1] and payment[2].")
+
+    else [
+    StringEntry("Pair_UV_" + EnterAssetID, EnterAssetID),
+    IntegerEntry("Listing_Fee_" + EnterAssetID, 0), 
+
+    IntegerEntry("Balance_of_" + EnterAssetID + "_" + SWRMAssetNAME, pmt1.amount), 
+    IntegerEntry("Balance_of_" + SWRMAssetNAME + "_" + EnterAssetID, pmt2.amount), 
+    IntegerEntry("Total_of_Pair_Txns_" + EnterAssetID, 0), 
+    IntegerEntry("Total_Volume_Of_" + SWRMAssetNAME + "_" + EnterAssetID,0),
+    IntegerEntry("Total_Volume_Of_" + EnterAssetID+"_" + SWRMAssetNAME,0),
+    IntegerEntry("Total_Swap_Fee_Collected_" + EnterAssetID + "_" + SWRMAssetNAME, 0), 
+    IntegerEntry("Total_Swap_Fee_Collected_" + EnterAssetID, 0),
+    
+    LPissue,
+    ScriptTransfer(i.caller, getSqrt, LPid), # Transfer LP AssetID To Lister
+    StringEntry("LP_" + EnterAssetID, toBase58String(LPid)), 
+    IntegerEntry("Total_LP_" + EnterAssetID, getSqrt) # Total LP Token Minted
+    ]
+    }    
+
+@Callable(i)
+func SwapAssetToSWRMPairEntry (EnterAssetID:String) = {
+    let calleraddress = toBase58String(i.caller.bytes)
+    let pmt = if (size(i.payments) == 1) then i.payments[0] else throw("Whitelisted Token is required as Attached payment[1].")
+    let checkpairisavailableornot = getString(this, "Pair_UV_" + EnterAssetID)
+    let CheckSWRMBalance = getIntegerValue(this,"Balance_of_" + EnterAssetID + "_" + SWRMAssetNAME)
+    let CheckAssetBalance = getIntegerValue(this,"Balance_of_" + SWRMAssetNAME + "_" + EnterAssetID)
+    let newbalanceofSWRM = fraction(CheckSWRMBalance, CheckAssetBalance,CheckAssetBalance + pmt.amount)
+    let quantityofpriceasset = CheckSWRMBalance - newbalanceofSWRM
+    let SwapFee = 5
+    let Currentday = countdays()
+    let SwapFeetoreceive = (quantityofpriceasset * SwapFee) / 1000
+    let userbalancetoreceive = quantityofpriceasset - SwapFeetoreceive - SwapFeetoreceive
+    let SumupofAssetToSWRMSwapFee =     match getInteger(this,"Total_Swap_Fee_Collected_" + EnterAssetID + "_" + SWRMAssetNAME) {
+        case a: Int => 
+            a
+        case _ => 
+            0
+    }
+    let NewSumupofAssetToSWRMSwapFee = SumupofAssetToSWRMSwapFee + SwapFeetoreceive + SwapFeetoreceive
+    
+    let SumupAssetBalance =     match getInteger(this,"Balance_of_" + SWRMAssetNAME + "_" + EnterAssetID) {
+        case a: Int => 
+            a
+        case _ => 
+            0
+    }
+    let NewSumupofAssetBalance = CheckAssetBalance + pmt.amount
+    
+    let SumupSWRMBalance =     match getInteger(this,"Balance_of_" + EnterAssetID + "_" + SWRMAssetNAME) {
+        case a: Int => 
+            a
+        case _ => 
+            0
+    }
+    let NewSumupofSWRMBalance = CheckSWRMBalance - quantityofpriceasset + SwapFeetoreceive
+    
+    let TOPT =     match getIntegerValue(this,"Total_of_Pair_Txns_" + EnterAssetID) {
+        case a: Int => 
+            a
+        case _ => 
+            0
+    }
+    let NewTPT = TOPT + 1
+
+    let PVOL =     match getIntegerValue(this,"Total_Volume_Of_" + SWRMAssetNAME + "_" + EnterAssetID ) { #Previous Volume
+        case a: Int => 
+            a
+        case _ => 
+            0
+    }
+    let TVOL = PVOL + pmt.amount    # Total Volume of Specific Asset Pair
+
+    let check_dapp_to_dapp = if(i.caller == i.originCaller || i.originCaller == Price_Balancer_dApp) then true else false
+
+    if (check_dapp_to_dapp == false) then throw("dApp-to-dApp invocation are restricted for the safety of Dapp.")
+
+    else if (EnterAssetID == SWRMAssetNAME)
+        then throw("Input can Never be a SWRM AssetID. Enter Whitelisted AssetID in input & Attach Whitelisted Asset as an attachment Token in payment[1].")
+    
+    else if (checkpairisavailableornot != EnterAssetID)
+    then throw("Pair is not available in Whitelisted Asset.")
+                
+    else if (pmt.assetId == SWRMAssetID)
+    then throw("You can't Attach SWRM as an Attached Payment. Only Whitelisted Tokens are accepted.")
+    
+    else if (pmt.assetId != fromBase58String(EnterAssetID))
+    then throw("Incorrect asset attached, please attach or send " + EnterAssetID)
+    
+    else if (CheckSWRMBalance == 0)
+    then throw("Swap Pair Need to Add Liquidity first into Pool. Only After that Pair will be activated for Swapping.")
+    
+    else if (CheckAssetBalance == 0)
+    then throw("Swap Pair Need to Add Liquidity first into Pool. Only After that Pair will be activated for Swapping.")
+    
+    else if (fraction(SwapFeetoreceive,1,3) == 0) 
+    then throw("You Need to attach more Tokens to Swap, Reason: Failure to Collect Minimum Fee.")
+
+    else if (1_00_000 > quantityofpriceasset) # Minimum Swap value must be 0.001 SWRM
+    then throw("Your Attached Asset Amount is very low. Attach More " + EnterAssetID + " Tokens to Claim the minimum Amount of 0.1 dollar atleast.")
+    
+    else if (quantityofpriceasset > CheckSWRMBalance)
+    then throw("Pool Only has a Liquidity of " + toString(CheckSWRMBalance / pow(10, 0, 8, 0, 0, CEILING)) + " SWRM. Add Liquidity into Pool.")
+    
+    else if ( 0 > SwapFeetoreceive)
+    then throw("Pool Swap Fee is going into Negative State due to Price/Less Liquidity Please Add Some liquidity into Pool.")
+
+    else [
+    IntegerEntry("Total_Swap_Fee_Collected_" + EnterAssetID + "_" + SWRMAssetNAME, NewSumupofAssetToSWRMSwapFee),
+    IntegerEntry("Current_Day",Currentday),
+    IntegerEntry("Total_of_Pair_Txns_" + EnterAssetID, NewTPT), 
+    IntegerEntry("Total_Volume_Of_" + SWRMAssetNAME + "_" + EnterAssetID,TVOL), 
+    IntegerEntry("Balance_of_" + SWRMAssetNAME + "_" + EnterAssetID, NewSumupofAssetBalance), 
+    IntegerEntry("Balance_of_" + EnterAssetID + "_" + SWRMAssetNAME, NewSumupofSWRMBalance), 
+    ScriptTransfer(i.caller, userbalancetoreceive, SWRMAssetID), 
+    ScriptTransfer(key1owner,fraction(SwapFeetoreceive,1,3), SWRMAssetID),
+    ScriptTransfer(key2owner,fraction(SwapFeetoreceive,1,3), SWRMAssetID),
+    ScriptTransfer(Treasury,fraction(SwapFeetoreceive,1,3), SWRMAssetID)
+        ]
+    }
+
+@Callable(i)
+func SwapSWRMToAssetPairEntry (EnterAssetID:String) = {
+    let calleraddress = toBase58String(i.caller.bytes)
+    let pmt = if (size(i.payments) == 1) then i.payments[0] else throw("Only " + SWRMAssetNAME + " Token is required as an Attached payment[1].")
+    let CheckSWRMBalance = getIntegerValue(this,"Balance_of_" + EnterAssetID + "_" + SWRMAssetNAME)
+    let CheckAssetBalance = getIntegerValue(this,"Balance_of_" + SWRMAssetNAME + "_" + EnterAssetID)
+    let newbalanceofAsset = fraction(CheckSWRMBalance, CheckAssetBalance, CheckSWRMBalance + pmt.amount)
+    let quantityofpriceasset = CheckAssetBalance - newbalanceofAsset
+    let checkpairisavailableornot = getString(this, "Pair_UV_" + EnterAssetID)
+    let SwapFee = 5
+    let Currentday = countdays()
+    let SwapFeetoreceive = (quantityofpriceasset * SwapFee) / 1000
+    let userbalancetoreceive = quantityofpriceasset - SwapFeetoreceive - SwapFeetoreceive
+    let SumupofSWRMToAssetSwapFee =     match getInteger(this, "Total_Swap_Fee_Collected_" + EnterAssetID) {
+        case a: Int => 
+            a
+        case _ => 
+            0
+    }
+    let NewSumupofSWRMToAssetSwapFee = SumupofSWRMToAssetSwapFee + SwapFeetoreceive + SwapFeetoreceive
+
+    let SumupAssetBalance =     match getInteger(this,"Balance_of_" + SWRMAssetNAME + "_" + EnterAssetID) {
+        case a: Int => 
+            a
+        case _ => 
+            0
+    }
+    let NewSumupofAssetBalance = CheckAssetBalance - quantityofpriceasset + SwapFeetoreceive
+    
+    let SumupSWRMBalance =     match getInteger(this, ("Balance_of_" + EnterAssetID + "_" + SWRMAssetNAME)) {
+        case a: Int => 
+            a
+        case _ => 
+            0
+    }
+    let NewSumupofSWRMBalance = CheckSWRMBalance + pmt.amount
+    
+    let TOPT =     match getIntegerValue(this, "Total_of_Pair_Txns_" + EnterAssetID) {
+        case a: Int => 
+            a
+        case _ => 
+            0
+    }
+    let NewTPT = TOPT + 1
+
+    let PVOL =     match getIntegerValue(this,"Total_Volume_Of_" + EnterAssetID+"_" + SWRMAssetNAME) { #Previous Volume
+        case a: Int => 
+            a
+        case _ => 
+            0
+    }
+    let TVOL = PVOL + pmt.amount    # Total Volume of Specific Asset Pair        
+    
+    let check_dapp_to_dapp = if(i.caller == i.originCaller || i.originCaller == Price_Balancer_dApp) then true else false
+
+    if (check_dapp_to_dapp == false) then throw("dApp-to-dApp invocation are restricted for the safety of Dapp.")
+
+    else if (checkpairisavailableornot != EnterAssetID) then throw("Pair is not available in Whitelisted Asset.") 
+    
+    else if (EnterAssetID == SWRMAssetNAME)
+    then throw("Input can Never be a SWRM AssetID. Enter Whitelisted AssetID in input & Attach SWRM as an attachment Token in payment[1].")
+    
+    else if (pmt.assetId != SWRMAssetID)
+    then throw("You can Attach "+SWRMAssetNAME+" as an Attached Payment[1] to Swap SWRM To Required Token. Any other asset else than SWRM will be rejected.")
+    
+    else if (1_000_0000 > pmt.amount) # 0.1 SWRM as minimum Trade Amount
+    then throw("Your Attached SWRM Amount is very low. Attach Atleast 0.1 SWRM to Claim the minimum Tokens.")
+    
+    else if (CheckSWRMBalance == 0)
+    then throw("Swap Pair Need to Add Liquidity first into Pool. Only After that Pair will be activated for Swapping.")
+    
+    else if (CheckAssetBalance == 0)
+    then throw("Swap Pair Need to Add Liquidity first into Pool. Only After that Pair will be activated for Swapping.")
+    
+    else if (fraction(SwapFeetoreceive,1,3) == 0) 
+    then throw("You Need to attach more Tokens to Swap, Reason: Failure to Collect Minimum Fee.")
+
+    else if (quantityofpriceasset > CheckAssetBalance)
+    then throw("Pool Only has a Liquidity of " + toString(CheckAssetBalance) + " Tokens. Add Liquidity into Pool.")
+
+    else if ( 0 > SwapFeetoreceive)
+    then throw("Pool Swap Fee is going into Negative State due to Price/Less Liquidity Please Add Some liquidity into Pool.")
+
+    else [
+        IntegerEntry("Total_Swap_Fee_Collected_" + EnterAssetID, NewSumupofSWRMToAssetSwapFee),
+        IntegerEntry("Current_Day",Currentday),
+        IntegerEntry("Total_of_Pair_Txns_" + EnterAssetID, NewTPT), 
+        IntegerEntry("Total_Volume_Of_" + EnterAssetID+"_" + SWRMAssetNAME,TVOL),                 
+        IntegerEntry("Balance_of_" + SWRMAssetNAME + "_" + EnterAssetID, NewSumupofAssetBalance), 
+        IntegerEntry("Balance_of_" + EnterAssetID + "_" + SWRMAssetNAME, NewSumupofSWRMBalance), 
+        ScriptTransfer(i.caller, userbalancetoreceive, fromBase58String(EnterAssetID)),
+        ScriptTransfer(key1owner,fraction(SwapFeetoreceive,1,3), fromBase58String(EnterAssetID)),
+        ScriptTransfer(key2owner,fraction(SwapFeetoreceive,1,3), fromBase58String(EnterAssetID)),
+        ScriptTransfer(Treasury,fraction(SwapFeetoreceive,1,3), fromBase58String(EnterAssetID))                  
+        ]
+    }
+
+@Callable(i)
+func AddLiquidity (EnterAssetID:String) = {
+    let calleraddress = toBase58String(i.caller.bytes)
+    let pmt1 = value(i.payments[0]) # Asset
+    let pmt2 = value(i.payments[1]) # SWRM 
+    let checkpairisavailableornot = getString(this, "Pair_UV_" + EnterAssetID)
+    let ReissueassetId = fromBase58String(valueOrErrorMessage(getString(this, "LP_" + EnterAssetID), "LP Token is Missing or May be not Generated."))
+    let CheckSWRMBalance = getIntegerValue(this, "Balance_of_" + EnterAssetID + "_" + SWRMAssetNAME)
+    let CheckAssetBalance = getIntegerValue(this, "Balance_of_" + SWRMAssetNAME + "_" + EnterAssetID)
+    let decimalsinfo = valueOrErrorMessage(assetInfo(fromBase58String(EnterAssetID)),"Asset " + EnterAssetID + " doesn't exist")
+    let decimals = decimalsinfo.decimals
+
+    let LPdecimals = fraction(decimals + 8, 1, 2) # Example for 8 Decimals Asset and 8 decimals for SWRM: (8+8)/2 = 8 decimals
+    let FirstLPQty = 1 * pow(10, 0, LPdecimals, 0, 0, CEILING) 
+    let multiply_amounts = fraction(pmt1.amount,pmt2.amount,FirstLPQty)
+    let getSqrt = sqrt(multiply_amounts,LPdecimals,LPdecimals,CEILING) # amount of LP Tokens user will receive
+
+    # Calculate Unit Token Price
+    let get_asset_decimals = pow(10,0,decimals,0,0,CEILING)
+    let get_SWRM_decimals = pow(10,0,8,0,0,CEILING) # SWRM Decimals
+    let unit_token_price = fraction(CheckSWRMBalance,get_asset_decimals,CheckAssetBalance)
+
+    # How much SWRM user need to Deposit
+    let user_SWRM_deposit_amount = fraction(pmt1.amount,unit_token_price,1)
+    let divide_by_asset_decimals = fraction(user_SWRM_deposit_amount,1,get_asset_decimals) 
+    let actual_SWRM_deposit_amount = divide_by_asset_decimals 
+
+    let SWRMHoldingInPair =     match getInteger(this,"Balance_of_" + EnterAssetID + "_" + SWRMAssetNAME) {
+        case a: Int => 
+            a
+        case _ => 
+            0
+    }
+    let NewSWRMHoldingInPair = SWRMHoldingInPair + pmt2.amount
+
+    let AssetHoldingInPair =     match getInteger(this,"Balance_of_" + SWRMAssetNAME + "_" + EnterAssetID) {
+        case a: Int => 
+            a
+        case _ => 
+            0
+    }
+    let NewAssetHoldingInPair = AssetHoldingInPair + pmt1.amount
+
+    let LPTokenIssued =     match getIntegerValue(this,"Total_LP_" + EnterAssetID) {
+        case a: Int => 
+            a
+        case _ => 
+            0
+    }
+    let NewLPTokenIssued = LPTokenIssued + getSqrt
+
+    if (checkpairisavailableornot != EnterAssetID)
+        then throw("Pair is not available in Whitelisted Asset.")
+
+    else if (EnterAssetID == SWRMAssetNAME)
+    then throw("Input can Never be a SWRM AssetID. Enter Whitelisted AssetID in input as well as in payment[1] & Attach SWRM as an attachment Token in payment[2].")
+
+    else if (size(i.payments) != 2)
+    then throw("Two attached assets are expected in payment. Kindly Attach payment1 = Token you want to add for Liquidity & payment2 = Amount of SWRM Token.")
+
+    else if (pmt1.assetId == SWRMAssetID)
+    then throw("You Attached SWRM asset in payment[1], please attach only whitelisted Token in payment[1] along with SWRM in payment[2].")
+
+    else if (pmt1.assetId != fromBase58String(EnterAssetID))
+    then throw("Incorrect asset attached for Liquidity in payment[1], please attach String Asset or Whitelisted Token only.")
+
+    else if (pmt2.assetId != SWRMAssetID)
+    then throw("Wrong Asset Attached in payments[2], Please attach payment[1] = Liquidity Token & payment[2] = SWRM Token.")
+
+    else if (1_000_0000 > pmt2.amount) # 0.10 SWRM
+    then throw("please attach atleast 0.1 SWRM in payment[2] & Equivalent worth of Token in payment[1]")
+
+    else if ((pmt2.amount != actual_SWRM_deposit_amount))
+    then throw("Attached payment[2] qty is not matching as per attached payment[1].payment[2] must be as int [" + toString(actual_SWRM_deposit_amount) +"]/10^8  SWRM.")
+
+    else if (1 > unit_token_price)
+    then throw("Token Price Outcome is going below 1 in Fractional.")
+
+    else if (1 > getSqrt)
+    then throw("LP Token Outcome is going below 1 in Fractional. Please Attach more amount.")
+else
+[
+IntegerEntry("Balance_of_" + EnterAssetID + "_" + SWRMAssetNAME, NewSWRMHoldingInPair), 
+IntegerEntry("Balance_of_" + SWRMAssetNAME + "_" + EnterAssetID, NewAssetHoldingInPair), 
+IntegerEntry("Total_LP_" + EnterAssetID, NewLPTokenIssued), 
+IntegerEntry("Token_Price",unit_token_price),
+IntegerEntry("User_SWRM_Deposit_Amount",actual_SWRM_deposit_amount),
+Reissue(ReissueassetId, getSqrt, true), 
+ScriptTransfer(i.caller, getSqrt, ReissueassetId)
+]
+} 
+
+@Callable(i)
+func RemoveLiquidity (EnterAssetID:String) = {
+    let calleraddress = toBase58String(i.caller.bytes)
+    let pmt = if (size(i.payments) == 1) then i.payments[0] else throw("No payment attached, Please Attach LP Token as payment[1].")
+    let checkpairisavailableornot = getString(this, "Pair_UV_" + EnterAssetID)
+ 
+    let ReissueableassetId = fromBase58String(valueOrErrorMessage(getString(this, "LP_" + EnterAssetID), "LP Token is Missing or not Generated."))
+    let decimalsinfo = valueOrErrorMessage(assetInfo(fromBase58String(EnterAssetID)), "Asset " + EnterAssetID + " doesn't exist")
+    let decimals = decimalsinfo.decimals
+    let bothassetsdecimals = 8 + decimals
+    let sharedecimals = bothassetsdecimals / 2
+    let CheckTotalLPAmount = getIntegerValue(this, "Total_LP_" + EnterAssetID)
+    let UserLPPercentage = pow(fraction(pmt.amount, pow(10, 0, 8, 0, 0, CEILING), CheckTotalLPAmount), 6, 1, 0, 6, CEILING)
+    let CheckSWRMBalance = getIntegerValue(this, "Balance_of_" + EnterAssetID + "_" + SWRMAssetNAME)
+    let CheckAssetBalance = getIntegerValue(this, "Balance_of_" + SWRMAssetNAME + "_" + EnterAssetID)
+    let UserLPWorthSWRM = fraction(CheckSWRMBalance, UserLPPercentage, pow(10, 0, 8, 0, 0, CEILING))
+    let UserLPWorthAsset = fraction(CheckAssetBalance, UserLPPercentage, pow(10, 0, 8, 0, 0, CEILING))
+    let SWRMHoldingInPair =     match getInteger(this,"Balance_of_" + EnterAssetID + "_" + SWRMAssetNAME) {
+        case a: Int => 
+            a
+        case _ => 
+            0
+    }
+    let NewSWRMHoldingInPair = SWRMHoldingInPair - UserLPWorthSWRM
+
+    let AssetHoldingInPair =     match getInteger(this,"Balance_of_" + SWRMAssetNAME + "_" + EnterAssetID) {
+        case a: Int => 
+            a
+        case _ => 
+            0
+    }
+    let NewAssetHoldingInPair = AssetHoldingInPair - UserLPWorthAsset
+
+    let LPTokenIssued =     match getIntegerValue(this, "Total_LP_" + EnterAssetID) {
+        case a: Int => 
+            a
+        case _ => 
+            0
+    }
+    let NewLPTokenIssued = LPTokenIssued - pmt.amount
+    
+    if (checkpairisavailableornot != EnterAssetID)
+    then throw("Pair is not available in Whitelist.")
+    
+    else if (EnterAssetID == SWRMAssetNAME)
+    then throw("Don't choose SWRM AssetID as Input, Only Whitelisted Asset as Input String & Attach LP Tokens as payment[1]")
+    
+    else if (pmt.assetId != ReissueableassetId)
+    then throw("Wrong Asset is attached in payment[1] or LP Token Not Found or Missing.")
+    
+    else if (1 > UserLPPercentage)
+    then throw("Your LP Token amount % is very low to convert.")
+
+    else if (UserLPPercentage == 100_000_000) # User Can not burn 100% of LP Token in Single Transaction. 
+    then throw("Your LP Conversion amount is reaching the maximum limit of 100% in single Transaction.")
+    
+    else if (1 > UserLPWorthSWRM)
+    then throw("Your LP Token conversion amount is very low to convert or less than 0.00000001 SWRM.")
+    
+    else if (1 > UserLPWorthAsset)
+    then throw("Your LP Token conversion amount is very low to convert or less than fraction value of Token.")
+    else [
+        IntegerEntry("Withdraw_LP_Percentage", UserLPPercentage), 
+        Burn(ReissueableassetId, pmt.amount), 
+        IntegerEntry("Total_LP_" + EnterAssetID, NewLPTokenIssued), 
+        IntegerEntry("Balance_of_" + EnterAssetID + "_" + SWRMAssetNAME, NewSWRMHoldingInPair), 
+        IntegerEntry("Balance_of_" + SWRMAssetNAME + "_" + EnterAssetID, NewAssetHoldingInPair), 
+        ScriptTransfer(i.caller, UserLPWorthSWRM, SWRMAssetID), 
+        ScriptTransfer(i.caller, UserLPWorthAsset, fromBase58String(EnterAssetID))
+        ]
+    }
+
+@Verifier(tx)
+func verify () = sigVerify(tx.bodyBytes, tx.proofs[0], tx.senderPublicKey)
